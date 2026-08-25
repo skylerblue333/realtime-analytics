@@ -45,8 +45,8 @@ describe('RealtimeAnalytics', () => {
     analytics.addDataPoint({ timestamp: 100, value: 2, source: '__proto__' });
 
     const grouped = analytics.aggregateBySource();
-    expect(grouped.api.value).toBe(10);
-    expect(grouped.__proto__.value).toBe(2);
+    expect(grouped.api!.value).toBe(10);
+    expect(grouped.__proto__!.value).toBe(2);
   });
 
   test('rejects invalid points and configuration', () => {
@@ -64,8 +64,8 @@ describe('RealtimeAnalytics', () => {
     analytics.addDataPoint({ timestamp: 100, value: 7, source: 'api', metadata: { region: 'us' } });
 
     const stream = analytics.getDataStream();
-    stream[0].value = 999;
-    expect(analytics.getDataStream()[0].value).toBe(7);
+    stream[0]!.value = 999;
+    expect(analytics.getDataStream()[0]!.value).toBe(7);
 
     analytics.reset();
     expect(analytics.getDataStream()).toEqual([]);
