@@ -1,13 +1,14 @@
 /**
- * Real-time Analytics Platform
- * Stream processing, aggregation, and visualization
+ * Sky Analytics Engine
+ * In-memory real-time analytics with bounded retention, windowed metrics,
+ * deterministic timestamps, and source aggregation.
  */
 
 export interface DataPoint {
   timestamp: number;
   value: number;
   source: string;
-  metadata?: Record<string, any>;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface Metric {
@@ -17,58 +18,112 @@ export interface Metric {
   timestamp: number;
 }
 
+export interface AnalyticsOptions {
+  windowSizeMs?: number;
+  maxPoints?: number;
+  now?: () => number;
+}
+
 export class RealtimeAnalytics {
   private dataStream: DataPoint[] = [];
-  private metrics: Map<string, Metric> = new Map();
-  private windowSize: number = 60000; // 1 minute
+  private readonly metrics = new Map<string, Metric>();
+  private readonly windowSizeMs: number;
+  private readonly maxPoints: number;
+  private readonly now: () => number;
+
+  constructor(options: AnalyticsOptions = {}) {
+    this.windowSizeMs = options.windowSizeMs ?? 60_000;
+    this.maxPoints = options.maxPoints ?? 10_000;
+    this.now = options.now ?? Date.now;
+
+    if (!Number.isFinite(this.windowSizeMs) || this.windowSizeMs <= 0) {
+      throw new RangeError('windowSizeMs must be a positive finite number');
+    }
+    if (!Number.isInteger(this.maxPoints) || this.maxPoints <= 0) {
+      throw new RangeError('maxPoints must be a positive integer');
+    }
+  }
 
   addDataPoint(point: DataPoint): void {
-    this.dataStream.push(point);
+    this.validatePoint(point);
+    this.dataStream.push({ ...point, metadata: point.metadata ? { ...point.metadata } : undefined });
+    this.trimRetention();
     this.updateMetrics();
   }
 
-  private updateMetrics(): void {
-    const now = Date.now();
-    const windowStart = now - this.windowSize;
-
-    const recentData = this.dataStream.filter((p) => p.timestamp >= windowStart);
-
-    if (recentData.length > 0) {
-      const avg = recentData.reduce((sum, p) => sum + p.value, 0) / recentData.length;
-      const max = Math.max(...recentData.map((p) => p.value));
-      const min = Math.min(...recentData.map((p) => p.value));
-
-      this.metrics.set('average', { name: 'average', value: avg, unit: 'units', timestamp: now });
-      this.metrics.set('max', { name: 'max', value: max, unit: 'units', timestamp: now });
-      this.metrics.set('min', { name: 'min', value: min, unit: 'units', timestamp: now });
-      this.metrics.set('count', { name: 'count', value: recentData.length, unit: 'count', timestamp: now });
+  private validatePoint(point: DataPoint): void {
+    if (!Number.isFinite(point.timestamp) || point.timestamp < 0) {
+      throw new RangeError('timestamp must be a non-negative finite number');
     }
+    if (!Number.isFinite(point.value)) {
+      throw new RangeError('value must be finite');
+    }
+    if (!point.source.trim()) {
+      throw new TypeError('source must be non-empty');
+    }
+  }
+
+  private trimRetention(): void {
+    const overflow = this.dataStream.length - this.maxPoints;
+    if (overflow > 0) this.dataStream.splice(0, overflow);
+  }
+
+  private updateMetrics(): void {
+    const timestamp = this.now();
+    const windowStart = timestamp - this.windowSizeMs;
+    const recentData = this.dataStream.filter(
+      (point) => point.timestamp >= windowStart && point.timestamp <= timestamp,
+    );
+
+    if (recentData.length === 0) {
+      this.metrics.clear();
+      return;
+    }
+
+    const values = recentData.map((point) => point.value);
+    const total = values.reduce((sum, value) => sum + value, 0);
+
+    this.metrics.set('average', { name: 'average', value: total / values.length, unit: 'units', timestamp });
+    this.metrics.set('max', { name: 'max', value: Math.max(...values), unit: 'units', timestamp });
+    this.metrics.set('min', { name: 'min', value: Math.min(...values), unit: 'units', timestamp });
+    this.metrics.set('count', { name: 'count', value: values.length, unit: 'count', timestamp });
   }
 
   getMetrics(): Metric[] {
-    return Array.from(this.metrics.values());
+    return Array.from(this.metrics.values(), (metric) => ({ ...metric }));
   }
 
   getDataStream(): DataPoint[] {
-    return this.dataStream;
+    return this.dataStream.map((point) => ({
+      ...point,
+      metadata: point.metadata ? { ...point.metadata } : undefined,
+    }));
   }
 
   aggregateBySource(): Record<string, Metric> {
-    const aggregated: Record<string, Metric> = {};
+    const timestamp = this.now();
+    const aggregated: Record<string, Metric> = Object.create(null) as Record<string, Metric>;
 
     for (const point of this.dataStream) {
-      if (!aggregated[point.source]) {
+      const existing = aggregated[point.source];
+      if (existing) {
+        existing.value += point.value;
+      } else {
         aggregated[point.source] = {
           name: point.source,
-          value: 0,
+          value: point.value,
           unit: 'units',
-          timestamp: Date.now(),
+          timestamp,
         };
       }
-      aggregated[point.source].value += point.value;
     }
 
     return aggregated;
+  }
+
+  reset(): void {
+    this.dataStream = [];
+    this.metrics.clear();
   }
 }
 
